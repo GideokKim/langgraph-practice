@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from typing import Annotated
 from typing_extensions import TypedDict
 from langchain.chat_models import init_chat_model
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, START
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -42,10 +43,13 @@ def create_chatbot_graph():
         "chatbot",
         tools_condition,
     )
-    
     graph_builder.add_edge("tools", "chatbot")
-    graph_builder.add_edge(START, "chatbot")
-    graph = graph_builder.compile()
+    graph_builder.set_entry_point("chatbot")
+
+    # Add checkpointer
+    memory = MemorySaver()
+    
+    graph = graph_builder.compile(checkpointer=memory)
 
     # Save graph visualization using graphviz
     try:
@@ -74,23 +78,70 @@ def create_chatbot_graph():
     return graph
 
 def run_chatbot(graph):
+    def format_message(message):
+        role = "User" if message.type == "human" else "Assistant"
+        return f"{role}: {message.content}"
+
+    def show_memory_state(current_state):
+        if not current_state or not current_state.values:
+            print("\n[Memory State] No messages in memory yet\n")
+            return
+        
+        messages = current_state.values.get('messages', [])
+        print("\n[Memory State]")
+        print(f"Total messages: {len(messages)}")
+        print("\nConversation history:")
+        for msg in messages:
+            print(format_message(msg))
+        print()
+
     def stream_graph_updates(user_input: str):
-        for event in graph.stream({"messages": [{"role": "user", "content": user_input}]}):
-            for node, value in event.items():
-                if node == "tools":
+        # Simplified config with just thread_id
+        config = {"configurable": {"thread_id": "main_thread"}}
+        
+        # Process the input and get response
+        for event in graph.stream(
+            {"messages": [{"role": "user", "content": user_input}]},
+            config,
+            stream_mode="values"
+        ):
+            # Print each node's output as it comes in
+            for node_name, node_output in event.items():
+                if node_name == "messages":
+                    # Check if there are any messages
+                    if isinstance(node_output, list) and len(node_output) > 0:
+                        # Get the last message
+                        last_message = node_output[-1]
+                        # If it's an AI message, print it
+                        if hasattr(last_message, 'type') and last_message.type == "ai":
+                            print("\nAssistant:", last_message.content)
+                elif node_name == "tools":
                     print("\n[Using Tool: Tavily Search]")
-                    for tool_call in value.get("tool_calls", []):
+                    for tool_call in node_output.get("tool_calls", []):
                         print(f"Tool Input: {tool_call.get('args', {})}")
                         print(f"Tool Output: {tool_call.get('result', '')}\n")
-                elif node == "chatbot":
-                    print("Assistant: ", value["messages"][-1].content)
+
+    print("\n[Memory Status]")
+    print("Using MemorySaver - state will be lost when program exits")
+    print("Type 'memory' to see conversation history, 'clear' to clear memory, or 'exit' to quit\n")
+
+    # Simplified config
+    config = {"configurable": {"thread_id": "main_thread"}}
 
     while True:
         try:
             user_input = input("User: ")
-            if user_input.lower() in ["exit", "quit", "q"]:
+            if user_input.lower() == "exit":
                 print("Exiting...")
                 break
+            elif user_input.lower() == "memory":
+                current_state = graph.get_state(config)
+                show_memory_state(current_state)
+                continue
+            elif user_input.lower() == "clear":
+                graph.clear_state(config)
+                print("\n[Memory cleared]\n")
+                continue
             stream_graph_updates(user_input)
         except KeyboardInterrupt:
             print("\nExiting...")
