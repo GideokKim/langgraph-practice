@@ -47,17 +47,22 @@ def create_chatbot_graph():
     graph_builder.add_edge(START, "chatbot")
     graph = graph_builder.compile()
 
-    # Save graph visualization
+    # Save graph visualization using graphviz
     try:
         import graphviz
-        dot = graphviz.Digraph(comment='Chatbot Graph')
+        # Get the graphviz object from langgraph
+        g = graph.get_graph()
+        # Convert to graphviz format and save
+        dot = graphviz.Digraph()
         dot.attr(rankdir='LR')
-        dot.node('START', 'START')
-        dot.node('chatbot', 'Chatbot')
-        dot.node('tools', 'Tools')
-        dot.edge('START', 'chatbot')
-        dot.edge('chatbot', 'tools')
-        dot.edge('tools', 'chatbot')
+        
+        # Add nodes and edges from the graph
+        for node in g.nodes:
+            dot.node(str(node), str(node))
+        for edge in g.edges:
+            dot.edge(str(edge[0]), str(edge[1]))
+            
+        # Save the visualization
         dot.render('chatbot_graph', format='png', cleanup=True)
         print("\nGraph visualization saved as 'chatbot_graph.png'")
     except Exception as e:
